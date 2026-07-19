@@ -1,0 +1,165 @@
+pipeline {
+    agent any
+
+    environment {
+        EMAIL_RECIPIENT = 'kumarpavan.0103@gmail.com'
+        SSH_KEY = credentials('EC2-SSH-PRIVATE-KEY-ID') // Jenkins credentials ID for PEM key
+        AWS_CREDENTIALS = credentials('AWS-CREDENTIAL-ID') // Jenkins AWS access key ID + secret key
+    }
+
+    stages {
+
+        stage('Check Variables') {
+            steps {
+                sh '''
+                echo "AWS_REGION=$AWS_REGION"
+                echo "ECR_REPO=$ECR_REPO_FRONTEND"
+                echo "EC2_HOST=$EC2_HOST"
+                echo "EC2_USER=$EC2_USER"
+                echo "FRONTEND_CONTAINER_NAME=$FRONTEND_CONTAINER_NAME"
+                echo "IMAGE_TAG=$IMAGE_TAG"
+                echo "FRONTEND_ENV_FILE=$FRONTEND_ENV_FILE"
+                '''
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                echo '⚙️ Building Docker image...'
+                sh '''
+                    docker build -t ${ECR_REPO_FRONTEND}:${IMAGE_TAG} -f frontend/Dockerfile .
+                '''
+            }
+        }
+
+
+        stage('Push Docker Image to ECR') {
+            steps {
+                echo '📤 Pushing Docker image to ECR...'
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'AWS-CREDENTIAL-ID'],string(credentialsId: 'AWS_REGION', variable: 'AWS_REGION')]) {
+                    sh """
+                        echo "Logging in to ECR..."
+                        aws ecr get-login-password --region ${AWS_REGION} | \
+                        docker login --username AWS --password-stdin ${ECR_REPO_FRONTEND}
+
+                        echo "Pushing image to ECR..."
+                        docker push ${ECR_REPO_FRONTEND}:${IMAGE_TAG}
+                    """
+                }
+            }
+        }
+
+
+
+        stage('Deploy on EC2 Instance') {
+            steps {
+                echo '🚀 Deploying container on EC2...'
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'AWS-CREDENTIAL-ID'],string(credentialsId: 'AWS_REGION', variable: 'AWS_REGION')]) {
+                    sh """
+                        echo "Connecting to EC2 and deploying..."
+                        ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ${EC2_USER}@${EC2_HOST} << 'EOF'
+                        echo "Logging into AWS ECR..."
+                        export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+                        export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+                        export AWS_DEFAULT_REGION=${AWS_REGION}
+                        aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REPO_FRONTEND}
+
+                        echo "Stopping old container..."
+                        docker rm -f ${FRONTEND_CONTAINER_NAME} || true
+
+                        echo "Pulling latest image..."
+                        docker pull ${ECR_REPO_FRONTEND}:${IMAGE_TAG}
+
+                        echo "Running new container..."
+                        docker run -d -it --name ${FRONTEND_CONTAINER_NAME} -p 3000:3000 --env-file=${FRONTEND_ENV_FILE} --restart=unless-stopped ${ECR_REPO_FRONTEND}:${IMAGE_TAG}
+
+                        echo "Deployment complete. Checking containers..."
+                        docker ps -a
+EOF
+                    """
+                }
+            }
+        }
+
+
+    }
+
+    post {
+        success {
+            mail to: "${EMAIL_RECIPIENT}",
+                subject: "Jenkins Pipeline Success: ${env.JOB_NAME} - Build #${env.BUILD_NUMBER}",
+                mimeType: 'text/html',
+                body: """
+                    <html>
+                      <body style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
+                        <div style="border: 1px solid #28a745; padding: 20px; border-radius: 10px; background-color: #f0fdf4; max-width: 600px; margin: 0 auto;">
+                         
+                          <h1 style="color: #28a745; font-size: 24px; text-align: center;">✅ Build Successful</h1>
+                         
+                          <p style="font-size: 18px; text-align: center; color: #333;">
+                            <strong>Project:</strong> ${env.JOB_NAME}<br/>
+                            <strong>Build Number:</strong> #${env.BUILD_NUMBER}<br/>
+                            <strong>Status:</strong> <span style="color: #28a745;">Success</span>
+                          </p>
+
+                          <p style="text-align: center;">
+                            The Jenkins pipeline for your project <strong>${env.JOB_NAME}</strong> has completed successfully.<br/>
+                            You can check the detailed build logs and artifacts by clicking the button below.
+                          </p>
+
+                          <div style="text-align: center; margin-top: 20px;">
+                            <a href="${env.BUILD_URL}" style="font-size: 16px; color: #fff; background-color: #28a745; padding: 12px 20px; text-decoration: none; border-radius: 5px;">
+                              View Build Details
+                            </a>
+                          </div>
+                         
+                          <div style="margin-top: 20px; font-size: 14px; text-align: center; color: #888;">
+                            <p>If you have any questions or need support, feel free to reach out.</p>
+                            <p>Thank you for using our Jenkins pipeline!</p>
+                          </div>
+                         
+                        </div>
+                      </body>
+                    </html>
+                """
+        }
+
+        failure {
+            mail to: "${EMAIL_RECIPIENT}",
+                subject: "Jenkins Pipeline Failure: ${env.JOB_NAME} - Build #${env.BUILD_NUMBER}",
+                mimeType: 'text/html',
+                body: """
+                    <html>
+                      <body style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
+                        <div style="border: 1px solid #dc3545; padding: 20px; border-radius: 10px; background-color: #fdeaea; max-width: 600px; margin: 0 auto;">
+                         
+                          <h1 style="color: #dc3545; font-size: 24px; text-align: center;">❌ Build Failed</h1>
+                         
+                          <p style="font-size: 18px; text-align: center; color: #333;">
+                            <strong>Project:</strong> ${env.JOB_NAME}<br/>
+                            <strong>Build Number:</strong> #${env.BUILD_NUMBER}<br/>
+                            <strong>Status:</strong> <span style="color: #dc3545;">Failed</span>
+                          </p>
+
+                          <p style="text-align: center;">
+                            The Jenkins pipeline for your project <strong>${env.JOB_NAME}</strong> has failed.<br/>
+                            Please check the detailed logs and errors by clicking the button below.
+                          </p>
+
+                          <div style="text-align: center; margin-top: 20px;">
+                            <a href="${env.BUILD_URL}" style="font-size: 16px; color: #fff; background-color: #dc3545; padding: 12px 20px; text-decoration: none; border-radius: 5px;">
+                              View Build Logs
+                            </a>
+                          </div>
+                         
+                          <div style="margin-top: 20px; font-size: 14px; text-align: center; color: #888;">
+                            <p>If you need further assistance, contact support.</p>
+                          </div>
+                         
+                        </div>
+                      </body>
+                    </html>
+                """
+        }
+    }
+}
