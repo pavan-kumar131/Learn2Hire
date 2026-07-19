@@ -20,7 +20,7 @@ export default defineConfig({
     },
   },
   preview: {
-    port: 5173,
+    port: 4173,
     proxy: {
       '/api': {
         target: proxyTarget,
