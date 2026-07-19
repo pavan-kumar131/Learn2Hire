@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     environment {
-        EMAIL_RECIPIENT = 'kumarpavan.0103@gmail.com, ankitpatel6684@gmai.com'
+        EMAIL_RECIPIENT = 'kumarpavan.0103@gmail.com, ankitpatel6684@gmail.com'
         SSH_KEY = credentials('EC2-SSH-PRIVATE-KEY-ID') // Jenkins credentials ID for PEM key
         AWS_CREDENTIALS = credentials('AWS-CREDENTIAL-ID') // Jenkins AWS access key ID + secret key
     }
